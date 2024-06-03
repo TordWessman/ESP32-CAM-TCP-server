@@ -44,6 +44,7 @@ void loop() {
     Serial.print("New client connected: ");
     Serial.println(client.remoteIP());
     while (client.connected()) {
+
       // Capture image
       camera_fb_t *fb = esp_camera_fb_get();
       if (!fb) {
@@ -60,7 +61,7 @@ void loop() {
       esp_camera_fb_return(fb);
       
       // Delay between frames (adjust as needed)
-      delay(1000 * (int)(1.0f / FPS)); // 30 frames per second
+      delay(1000.0 / FPS);
     }
 
     // Close client connection
