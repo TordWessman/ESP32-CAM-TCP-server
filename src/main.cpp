@@ -1,7 +1,8 @@
+#include <Arduino.h>
 #include <WiFi.h>
 #include "esp_camera.h"
 #include "camera_config.h"
-#include "include/secrets.h"
+#include "secrets.h"
 
 // TCP port
 #define PORT 1234

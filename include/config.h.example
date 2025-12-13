@@ -1,0 +1,22 @@
+// WiFi Configuration Example
+// Copy this file to src/config.h and update with your credentials
+// Then modify src/main.cpp to include this file instead of hardcoded values
+
+#ifndef CONFIG_H
+#define CONFIG_H
+
+// WiFi Settings
+#define SSID "your-wifi-ssid"
+#define WIFI_PASSWORD "your-wifi-password"
+
+// Server Settings
+#define PORT 1234
+#define FPS 30.0
+
+// Camera Model - Uncomment your board type
+#define CAMERA_MODEL_AI_THINKER  // Default
+// #define CAMERA_MODEL_WROVER_KIT
+// #define CAMERA_MODEL_ESP_EYE
+// #define CAMERA_MODEL_M5STACK_PSRAM
+
+#endif // CONFIG_H
