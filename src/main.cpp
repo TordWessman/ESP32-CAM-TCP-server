@@ -13,22 +13,32 @@ WiFiServer server(PORT);
 
 void setup() {
   Serial.begin(115200);
+  delay(1000);  // Give serial monitor time to connect
+
+  Serial.println("\n\n=================================");
+  Serial.println("ESP32-CAM TCP Server Starting...");
+  Serial.println("=================================");
   Serial.setDebugOutput(true);
 
   // Initialize camera
   bool cameraConfigured = createCameraConfiguration();
 
   if (!cameraConfigured) {
-    return;
+      Serial.println("ERROR: Camera configuration failed!");
+      return;
   }
+  Serial.println("✓ Camera initialized successfully");
 
   // Connect to WiFi
+  Serial.printf("\nConnecting to WiFi SSID: %s\n", SSID);
   WiFi.begin(SSID, WIFI_PASSWORD);
 
   while (WiFi.status() != WL_CONNECTED) {
     delay(1000);
-    Serial.println("Connecting to WiFi...");
+    Serial.print(".");
   }
+
+  Serial.println("\n✓ WiFi connected!");
 
   // Start TCP server
   server.begin();
