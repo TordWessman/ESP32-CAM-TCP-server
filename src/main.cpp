@@ -1,33 +1,38 @@
 #include <Arduino.h>
 #include <WiFi.h>
-#include "esp_camera.h"
-#include "camera_config.h"
 #include "secrets.h"
 
-// TCP port
-#define PORT 1234
-// Frames Per Second
-#define FPS 30.0
+// ============================================================
+// MODE SELECTION - Choose ONE by uncommenting
+// ============================================================
+//#define USE_SERVER_MODE    // CameraTcpServer (relay pulls from ESP32)
+#define USE_CLIENT_MODE // CameraRelayClient (ESP32 pushes to relay)
+// ============================================================
 
-WiFiServer server(PORT);
+#ifdef USE_SERVER_MODE
+  #include "CameraTcpServer.h"
+  #define PORT 1234
+  #define FPS 30.0
+  CameraTcpServer camera(PORT, FPS);
+  #define MODE_NAME "Server Mode (Pull)"
+#elif defined(USE_CLIENT_MODE)
+  #include "CameraRelayClient.h"
+  #define RELAY_HOST "oland.nejokey.se"  // Change to your relay server IP
+  #define RELAY_PORT 4444
+  #define FPS 10.0
+  CameraRelayClient camera(RELAY_HOST, RELAY_PORT, FPS);
+  #define MODE_NAME "Client Mode (Push)"
+#else
+  #error "Please define either USE_SERVER_MODE or USE_CLIENT_MODE"
+#endif
 
 void setup() {
   Serial.begin(115200);
   delay(1000);  // Give serial monitor time to connect
 
   Serial.println("\n\n=================================");
-  Serial.println("ESP32-CAM TCP Server Starting...");
+  Serial.printf("ESP32-CAM Streaming: %s\n", MODE_NAME);
   Serial.println("=================================");
-  Serial.setDebugOutput(true);
-
-  // Initialize camera
-  bool cameraConfigured = createCameraConfiguration();
-
-  if (!cameraConfigured) {
-      Serial.println("ERROR: Camera configuration failed!");
-      return;
-  }
-  Serial.println("✓ Camera initialized successfully");
 
   // Connect to WiFi
   Serial.printf("\nConnecting to WiFi SSID: %s\n", SSID);
@@ -39,41 +44,59 @@ void setup() {
   }
 
   Serial.println("\n✓ WiFi connected!");
+  Serial.print("ESP32-CAM IP: ");
+  Serial.println(WiFi.localIP());
 
-  // Start TCP server
-  server.begin();
-  Serial.printf("Server started on port %d\n", PORT);
-  Serial.print("Address: "); Serial.println(WiFi.localIP());
+  // Enable debug output
+  camera.setDebug(true);
+
+  // Initialize camera and network
+  if (!camera.begin()) {
+    Serial.println("ERROR: Camera initialization failed!");
+    Serial.println("System halted.");
+    while(1) delay(1000);
+  }
+
+  Serial.println("\n=================================");
+  Serial.println("✓ System ready!");
+  
+#ifdef USE_SERVER_MODE
+  Serial.printf("Listening on port %d\n", PORT);
+  Serial.println("Waiting for relay server to connect...");
+#else
+  Serial.printf("Relay Server: %s:%d\n", RELAY_HOST, RELAY_PORT);
+  Serial.println("Will connect to relay server...");
+#endif
+  
+  Serial.printf("Target FPS: %.1f\n", FPS);
+  Serial.println("=================================\n");
 }
 
 void loop() {
-  WiFiClient client = server.available();
-  if (client) {
-    Serial.print("New client connected: ");
-    Serial.println(client.remoteIP());
-    while (client.connected()) {
+  // Run camera streaming (everything handled internally!)
+#ifdef USE_SERVER_MODE
+  CameraTcpServer::Status status = camera.run();
+#else
+  CameraRelayClient::Status status = camera.run();
+#endif
 
-      // Capture image
-      camera_fb_t *fb = esp_camera_fb_get();
-      if (!fb) {
-        Serial.println("Failed to capture image");
-        break;
-      }
-
-      // Send image data over TCP
-      if (client.write(fb->buf, fb->len) != fb->len) {
-        Serial.println("Error sending image");
-      }
-
-      // Free image buffer
-      esp_camera_fb_return(fb);
-      
-      // Delay between frames (adjust as needed)
-      delay(1000.0 / FPS);
-    }
-
-    // Close client connection
-    client.stop();
-    Serial.println("Client disconnected");
+  // Optional: Print stats every 10 seconds
+  static unsigned long lastStats = 0;
+  if (millis() - lastStats > 10000) {
+    Serial.printf("\n--- Statistics ---\n");
+    Serial.printf("Frames sent: %u\n", camera.getFrameCount());
+    Serial.printf("Bytes sent: %u\n", camera.getBytesSent());
+    Serial.printf("Actual FPS: %.1f\n", camera.getActualFPS());
+    
+#ifdef USE_SERVER_MODE
+    Serial.printf("Clients served: %u\n", camera.getClientCount());
+    Serial.printf("Status: %s\n", CameraTcpServer::getStatusString(status));
+#else
+    Serial.printf("Connected: %s\n", camera.isConnected() ? "Yes" : "No");
+    Serial.printf("Status: %s\n", CameraRelayClient::getStatusString(status));
+#endif
+    
+    Serial.printf("------------------\n\n");
+    lastStats = millis();
   }
 }
