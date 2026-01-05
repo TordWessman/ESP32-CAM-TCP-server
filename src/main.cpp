@@ -1,6 +1,19 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include "secrets.h"
+#include "esp_log.h"
+
+// ============================================================
+// LOGGING CONFIGURATION
+// ============================================================
+// Set ESP32 SDK log level - uncomment ONE option:
+//#define APP_LOG_LEVEL ESP_LOG_VERBOSE  // Most detailed
+//#define APP_LOG_LEVEL ESP_LOG_DEBUG    // Debug messages
+//#define APP_LOG_LEVEL ESP_LOG_INFO     // Informational messages
+//#define APP_LOG_LEVEL ESP_LOG_WARN     // Warning messages
+#define APP_LOG_LEVEL ESP_LOG_ERROR      // Error messages only (recommended for production)
+//#define APP_LOG_LEVEL ESP_LOG_NONE     // No SDK logging at all
+// ============================================================
 
 // ============================================================
 // MODE SELECTION - Choose ONE by uncommenting
@@ -23,54 +36,61 @@
   CameraRelayClient camera(RELAY_HOST, RELAY_PORT, FPS);
   #define MODE_NAME "Client Mode (Push)"
 #else
-  #error "Please define either USE_SERVER_MODE or USE_CLIENT_MODE"
+#error "Please define either USE_SERVER_MODE or USE_CLIENT_MODE"
 #endif
 
-void setup() {
-  Serial.begin(115200);
-  delay(1000);  // Give serial monitor time to connect
+  void setup()
+  {
+    Serial.begin(115200);
+    delay(1000); // Give serial monitor time to connect
+    
+    // Set ESP32 SDK log level (reduces noise from WiFi, camera drivers, etc.)
+    esp_log_level_set("*", APP_LOG_LEVEL);
 
-  Serial.println("\n\n=================================");
-  Serial.printf("ESP32-CAM Streaming: %s\n", MODE_NAME);
-  Serial.println("=================================");
+    Serial.println("\n\n=================================");
+    Serial.printf("ESP32-CAM Streaming: %s\n", MODE_NAME);
+    Serial.println("=================================");
 
-  // Connect to WiFi
-  Serial.printf("\nConnecting to WiFi SSID: %s\n", SSID);
-  WiFi.begin(SSID, WIFI_PASSWORD);
+    // Connect to WiFi
+    Serial.printf("\nConnecting to WiFi SSID: %s\n", SSID);
+    WiFi.begin(SSID, WIFI_PASSWORD);
 
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(1000);
-    Serial.print(".");
-  }
+    while (WiFi.status() != WL_CONNECTED)
+    {
+      delay(1000);
+      Serial.print(".");
+    }
 
-  Serial.println("\n✓ WiFi connected!");
-  Serial.print("ESP32-CAM IP: ");
-  Serial.println(WiFi.localIP());
+    Serial.println("\n✓ WiFi connected!");
+    Serial.print("ESP32-CAM IP: ");
+    Serial.println(WiFi.localIP());
 
-  // Enable debug output
-  camera.setDebug(true);
+    // Enable debug output
+    camera.setDebug(true);
 
-  // Initialize camera and network
-  if (!camera.begin()) {
-    Serial.println("ERROR: Camera initialization failed!");
-    Serial.println("System halted.");
-    while(1) delay(1000);
-  }
+    // Initialize camera and network
+    if (!camera.begin())
+    {
+      Serial.println("ERROR: Camera initialization failed!");
+      Serial.println("System halted.");
+      while (1)
+        delay(1000);
+    }
 
-  Serial.println("\n=================================");
-  Serial.println("✓ System ready!");
-  
+    Serial.println("\n=================================");
+    Serial.println("✓ System ready!");
+
 #ifdef USE_SERVER_MODE
-  Serial.printf("Listening on port %d\n", PORT);
-  Serial.println("Waiting for relay server to connect...");
+    Serial.printf("Listening on port %d\n", PORT);
+    Serial.println("Waiting for relay server to connect...");
 #else
-  Serial.printf("Relay Server: %s:%d\n", RELAY_HOST, RELAY_PORT);
-  Serial.println("Will connect to relay server...");
+    Serial.printf("Relay Server: %s:%d\n", RELAY_HOST, RELAY_PORT);
+    Serial.println("Will connect to relay server...");
 #endif
-  
-  Serial.printf("Target FPS: %.1f\n", FPS);
-  Serial.println("=================================\n");
-}
+
+    Serial.printf("Target FPS: %.1f\n", FPS);
+    Serial.println("=================================\n");
+  }
 
 void loop() {
   // Run camera streaming (everything handled internally!)
