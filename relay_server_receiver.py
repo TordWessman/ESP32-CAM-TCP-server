@@ -52,45 +52,74 @@ class ESP32CamReceiverRelay:
         self.start_time = time.time()
         
     def handle_esp32_connection(self, conn, addr):
-        """Handle incoming connection from ESP32-CAM"""
+        """Handle incoming connection from ESP32-CAM (continuous stream)"""
         logger.info(f"ESP32-CAM connected from {addr}")
         
+        buffer = b''
+        frame_count = 0
+        
         try:
-            # Receive frame data
-            frame_data = b''
-            start_time = time.time()
-            
-            while True:
+            while self.running:
+                # Receive data in chunks
                 chunk = conn.recv(4096)
                 if not chunk:
+                    logger.info(f"ESP32-CAM {addr} disconnected")
                     break
-                frame_data += chunk
                 
-                # Safety check
-                if len(frame_data) > 1024 * 1024:
-                    logger.warning("Frame too large, discarding")
-                    break
-            
-            if frame_data:
-                # Update latest frame
-                with self.latest_frame_lock:
-                    self.latest_frame = frame_data
+                buffer += chunk
                 
-                self.total_frames += 1
-                self.total_bytes += len(frame_data)
-                
-                frame_time = time.time() - start_time
-                fps = self.total_frames / (time.time() - self.start_time)
-                
-                logger.info(f"Frame #{self.total_frames}: {len(frame_data)} bytes ({frame_time:.3f}s, {fps:.2f} fps avg)")
-                
-                # Broadcast to all clients
-                self.broadcast_frame(frame_data)
+                # Look for JPEG frames in the buffer
+                # JPEG starts with 0xFF 0xD8 and ends with 0xFF 0xD9
+                while True:
+                    # Find start of JPEG
+                    start_idx = buffer.find(b'\xff\xd8')
+                    if start_idx == -1:
+                        # No JPEG start found, keep first byte in case it's 0xFF
+                        buffer = buffer[-1:] if buffer else b''
+                        break
+                    
+                    # Find end of JPEG (after the start)
+                    end_idx = buffer.find(b'\xff\xd9', start_idx + 2)
+                    if end_idx == -1:
+                        # Incomplete JPEG, wait for more data
+                        # But discard any data before the JPEG start
+                        buffer = buffer[start_idx:]
+                        break
+                    
+                    # Extract complete JPEG frame (include the end marker)
+                    frame_data = buffer[start_idx:end_idx + 2]
+                    
+                    # Remove processed frame from buffer
+                    buffer = buffer[end_idx + 2:]
+                    
+                    # Process the frame
+                    frame_count += 1
+                    self.total_frames += 1
+                    self.total_bytes += len(frame_data)
+                    
+                    fps = self.total_frames / (time.time() - self.start_time)
+                    
+                    logger.info(f"Frame #{self.total_frames}: {len(frame_data)} bytes "
+                              f"({len(frame_data)/1024:.1f} KB, {fps:.2f} fps avg)")
+                    
+                    # Update latest frame
+                    with self.latest_frame_lock:
+                        self.latest_frame = frame_data
+                    
+                    # Broadcast to all clients
+                    self.broadcast_frame(frame_data)
+                    
+                    # Safety check - prevent buffer from growing too large
+                    if len(buffer) > 500000:  # 500KB
+                        logger.warning(f"Buffer too large ({len(buffer)} bytes), resetting")
+                        buffer = b''
+                        break
             
         except Exception as e:
             logger.error(f"Error receiving from ESP32-CAM {addr}: {e}")
         finally:
             conn.close()
+            logger.info(f"ESP32-CAM {addr} connection closed. Total frames received: {frame_count}")
     
     def broadcast_frame(self, frame_data):
         """Send frame to all connected clients"""

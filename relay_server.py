@@ -35,20 +35,32 @@ class ESP32CamBroadcastRelay:
                 
                 while self.running:
                     frame_data = b''
+                    
+                    # Read data until connection closes or we get a complete JPEG
                     while True:
                         chunk = sock.recv(4096)
                         if not chunk:
                             break
                         frame_data += chunk
+                        
+                        # Check if we have a complete JPEG (ends with 0xFF 0xD9)
+                        if len(frame_data) > 2 and frame_data[-2:] == b'\xff\xd9':
+                            break
+                        
+                        # Safety check
                         if len(frame_data) > 1024 * 1024:
                             raise Exception("Frame too large")
                     
                     if frame_data:
-                        with self.latest_frame_lock:
-                            self.latest_frame = frame_data
-                        self.total_frames += 1
-                        logger.info(f"Frame #{self.total_frames}: {len(frame_data)} bytes")
-                        self.broadcast_frame(frame_data)
+                        # Verify it's a valid JPEG (starts with 0xFF 0xD8)
+                        if frame_data[:2] == b'\xff\xd8':
+                            with self.latest_frame_lock:
+                                self.latest_frame = frame_data
+                            self.total_frames += 1
+                            logger.info(f"Frame #{self.total_frames}: {len(frame_data)} bytes ({len(frame_data)/1024:.1f} KB)")
+                            self.broadcast_frame(frame_data)
+                        else:
+                            logger.warning(f"Invalid JPEG data received (first bytes: {frame_data[:4].hex()})")
                     
                     sock.close()
                     time.sleep(0.05)

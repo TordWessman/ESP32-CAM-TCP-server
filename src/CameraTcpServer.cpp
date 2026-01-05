@@ -174,6 +174,10 @@ CameraTcpServer::Status CameraTcpServer::run() {
         return CAMERA_CAPTURE_FAILED;
     }
     
+    // Print frame size
+    debugPrintf("[CameraTcpServer] Frame #%u: %u bytes (%.1f KB)", 
+                _frameCount + 1, fb->len, fb->len / 1024.0);
+    
     // Send frame
     size_t written = _client.write(fb->buf, fb->len);
     
@@ -183,6 +187,8 @@ CameraTcpServer::Status CameraTcpServer::run() {
         disconnectClient();
         return SEND_FAILED;
     }
+    
+    debugPrintf("[CameraTcpServer] ✓ Sent %u bytes successfully", written);
     
     // Update statistics
     _bytesSent += written;

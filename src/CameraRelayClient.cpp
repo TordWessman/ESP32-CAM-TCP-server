@@ -166,6 +166,10 @@ CameraRelayClient::Status CameraRelayClient::run() {
         return CAMERA_CAPTURE_FAILED;
     }
     
+    // Print frame size
+    debugPrintf("[CameraRelayClient] Frame #%u: %u bytes (%.1f KB)", 
+                _frameCount + 1, fb->len, fb->len / 1024.0);
+    
     // Send frame
     size_t written = _client.write(fb->buf, fb->len);
     
@@ -176,6 +180,8 @@ CameraRelayClient::Status CameraRelayClient::run() {
         _client.stop();
         return SEND_FAILED;
     }
+    
+    debugPrintf("[CameraRelayClient] ✓ Sent %u bytes successfully", written);
     
     // Update statistics
     _bytesSent += written;
