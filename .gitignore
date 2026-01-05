@@ -28,3 +28,6 @@ Thumbs.db
 
 #rust
 target
+
+#swift sdk
+swift.sdk
