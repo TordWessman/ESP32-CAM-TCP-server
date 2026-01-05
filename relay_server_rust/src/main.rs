@@ -16,7 +16,7 @@ use chrono::Local;
 use clap::Parser;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, watch, RwLock};
 
 const JPEG_START: [u8; 2] = [0xFF, 0xD8];
 const JPEG_END: [u8; 2] = [0xFF, 0xD9];
@@ -216,7 +216,7 @@ async fn handle_client_connection(
     stats: Arc<Stats>,
     running: Arc<AtomicBool>,
 ) {
-    log_info(&format!("Client connected from {}", addr));
+    log_info(&format!("Client mamma connected from {}", addr));
     stats.active_clients.fetch_add(1, Ordering::Relaxed);
     log_info(&format!("Active clients: {}", stats.active_clients.load(Ordering::Relaxed)));
 
@@ -270,28 +270,36 @@ async fn run_sender_server(
     latest_frame: Arc<RwLock<Option<Arc<Vec<u8>>>>>,
     stats: Arc<Stats>,
     running: Arc<AtomicBool>,
+    mut shutdown_rx: watch::Receiver<bool>,
 ) -> std::io::Result<()> {
     let addr = format!("{}:{}", host, port);
     let listener = TcpListener::bind(&addr).await?;
 
     log_info(&format!("ESP32-CAM server listening on {}", addr));
 
-    while running.load(Ordering::Relaxed) {
-        match listener.accept().await {
-            Ok((socket, addr)) => {
-                let frame_tx = frame_tx.clone();
-                let latest_frame = Arc::clone(&latest_frame);
-                let stats = Arc::clone(&stats);
-                let running = Arc::clone(&running);
+    loop {
+        tokio::select! {
+            result = listener.accept() => {
+                match result {
+                    Ok((socket, addr)) => {
+                        let frame_tx = frame_tx.clone();
+                        let latest_frame = Arc::clone(&latest_frame);
+                        let stats = Arc::clone(&stats);
+                        let running = Arc::clone(&running);
 
-                tokio::spawn(async move {
-                    handle_esp32_connection(socket, addr, frame_tx, latest_frame, stats, running).await;
-                });
-            }
-            Err(e) => {
-                if running.load(Ordering::Relaxed) {
-                    log_error(&format!("Error accepting ESP32-CAM: {}", e));
+                        tokio::spawn(async move {
+                            handle_esp32_connection(socket, addr, frame_tx, latest_frame, stats, running).await;
+                        });
+                    }
+                    Err(e) => {
+                        if running.load(Ordering::Relaxed) {
+                            log_error(&format!("Error accepting ESP32-CAM: {}", e));
+                        }
+                    }
                 }
+            }
+            _ = shutdown_rx.changed() => {
+                break;
             }
         }
     }
@@ -306,28 +314,36 @@ async fn run_client_server(
     latest_frame: Arc<RwLock<Option<Arc<Vec<u8>>>>>,
     stats: Arc<Stats>,
     running: Arc<AtomicBool>,
+    mut shutdown_rx: watch::Receiver<bool>,
 ) -> std::io::Result<()> {
     let addr = format!("{}:{}", host, port);
     let listener = TcpListener::bind(&addr).await?;
 
     log_info(&format!("Client server listening on {}", addr));
 
-    while running.load(Ordering::Relaxed) {
-        match listener.accept().await {
-            Ok((socket, addr)) => {
-                let frame_rx = frame_tx.subscribe();
-                let latest_frame = Arc::clone(&latest_frame);
-                let stats = Arc::clone(&stats);
-                let running = Arc::clone(&running);
+    loop {
+        tokio::select! {
+            result = listener.accept() => {
+                match result {
+                    Ok((socket, addr)) => {
+                        let frame_rx = frame_tx.subscribe();
+                        let latest_frame = Arc::clone(&latest_frame);
+                        let stats = Arc::clone(&stats);
+                        let running = Arc::clone(&running);
 
-                tokio::spawn(async move {
-                    handle_client_connection(socket, addr, frame_rx, latest_frame, stats, running).await;
-                });
-            }
-            Err(e) => {
-                if running.load(Ordering::Relaxed) {
-                    log_error(&format!("Error accepting client: {}", e));
+                        tokio::spawn(async move {
+                            handle_client_connection(socket, addr, frame_rx, latest_frame, stats, running).await;
+                        });
+                    }
+                    Err(e) => {
+                        if running.load(Ordering::Relaxed) {
+                            log_error(&format!("Error accepting client: {}", e));
+                        }
+                    }
                 }
+            }
+            _ = shutdown_rx.changed() => {
+                break;
             }
         }
     }
@@ -397,6 +413,7 @@ async fn main() -> std::io::Result<()> {
     let latest_frame: Arc<RwLock<Option<Arc<Vec<u8>>>>> = Arc::new(RwLock::new(None));
     let stats = Arc::new(Stats::new());
     let running = Arc::new(AtomicBool::new(true));
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     // Handle Ctrl+C
     let running_ctrlc = Arc::clone(&running);
@@ -404,6 +421,7 @@ async fn main() -> std::io::Result<()> {
         tokio::signal::ctrl_c().await.ok();
         log_info("\nShutting down...");
         running_ctrlc.store(false, Ordering::Relaxed);
+        let _ = shutdown_tx.send(true);
     });
 
     // Start stats printer
@@ -418,6 +436,7 @@ async fn main() -> std::io::Result<()> {
     let latest_frame_sender = Arc::clone(&latest_frame);
     let stats_sender = Arc::clone(&stats);
     let running_sender = Arc::clone(&running);
+    let shutdown_rx_sender = shutdown_rx.clone();
     let sender_handle = tokio::spawn(async move {
         if let Err(e) = run_sender_server(
             args.sender_host,
@@ -426,6 +445,7 @@ async fn main() -> std::io::Result<()> {
             latest_frame_sender,
             stats_sender,
             running_sender,
+            shutdown_rx_sender,
         ).await {
             log_error(&format!("Sender server error: {}", e));
         }
@@ -442,6 +462,7 @@ async fn main() -> std::io::Result<()> {
             latest_frame,
             stats_client,
             running_client,
+            shutdown_rx,
         ).await {
             log_error(&format!("Client server error: {}", e));
         }
