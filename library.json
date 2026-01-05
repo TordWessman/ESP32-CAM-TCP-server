@@ -1,0 +1,23 @@
+{
+  "name": "ESP32-CAM-TCP",
+  "version": "1.0.0",
+  "description": "ESP32-CAM camera configuration and TCP streaming utilities for OV2640",
+  "keywords": ["esp32", "esp32-cam", "camera", "ov2640", "tcp", "streaming"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/user/camera.tcp"
+  },
+  "authors": [
+    {
+      "name": "Tord Wessman"
+    }
+  ],
+  "license": "MIT",
+  "frameworks": "arduino",
+  "platforms": "espressif32",
+  "headers": ["camera_config.h", "camera_pins.h"],
+  "build": {
+    "flags": "-I include",
+    "srcFilter": "-<*>"
+  }
+}

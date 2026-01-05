@@ -1,4 +1,6 @@
-#define CAMERA_MODEL_AI_THINKER // Has PSRAM
+#ifndef CAMERA_CONFIG_H
+#define CAMERA_CONFIG_H
+
 #include "esp_camera.h"
 #include "camera_pins.h"
 
@@ -85,3 +87,5 @@ bool createCameraConfiguration() {
 
   return true;
 }
+
+#endif // CAMERA_CONFIG_H
