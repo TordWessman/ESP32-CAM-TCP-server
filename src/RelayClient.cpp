@@ -95,14 +95,10 @@ bool RelayClient::sendData(const uint8_t* data, size_t length) {
     _lastSendTime = millis();
     
     if (_debug) {
-        debugPrintf("Sent frame #%lu: %d bytes (FPS: %.2f)", 
+        debugPrintf("Sent frame #%lu: %d bytes (FPS: %.2f)",
                    _frameCount, length, getActualFPS());
     }
-    
-    // Close connection after sending (relay server expects this)
-    _client.stop();
-    _isConnected = false;
-    
+
     return true;
 }
 
