@@ -251,6 +251,7 @@ void CameraRelayClient::attemptConnection() {
     if (_client.connect(_host, _port)) {
         _isConnected = true;
         _client.setNoDelay(true);  // Disable Nagle's algorithm for lower latency
+        _client.setTimeout(150);   // 150ms socket timeout
         debugPrint("[CameraRelayClient] ✓ Connected!");
     } else {
         debugPrint("[CameraRelayClient] ✗ Connection failed");
