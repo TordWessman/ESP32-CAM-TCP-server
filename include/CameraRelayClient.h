@@ -1,22 +1,26 @@
 /**
  * CameraRelayClient - Complete ESP32-CAM to Relay Streaming Solution
- * 
+ *
  * This module handles everything needed for camera streaming:
  * - Camera initialization and configuration
  * - Frame capture and encoding
- * - TCP connection to relay server
+ * - Network connection to relay server (TCP or UDP)
  * - Automatic reconnection and error handling
  * - FPS throttling
- * 
- * Usage:
+ *
+ * Usage with default TCP:
  *   CameraRelayClient client("relay.example.com", 1234, 10.0);
- *   
+ *
+ * Usage with UDP (dependency injection):
+ *   UDPNetworkClient* udp = new UDPNetworkClient();
+ *   CameraRelayClient client("relay.example.com", 1234, 10.0, udp);
+ *
  *   void setup() {
  *     WiFi.begin(ssid, password);
  *     while (WiFi.status() != WL_CONNECTED) delay(500);
  *     client.begin();
  *   }
- *   
+ *
  *   void loop() {
  *     CameraRelayClient::Status status = client.run();
  *     // That's it! Everything is handled internally
@@ -27,7 +31,7 @@
 #define CAMERA_RELAY_CLIENT_H
 
 #include <Arduino.h>
-#include <WiFiClient.h>
+#include "NetworkClient.h"
 #include "esp_camera.h"
 
 class CameraRelayClient {
@@ -51,9 +55,16 @@ public:
      * @param host Relay server hostname or IP address
      * @param port Relay server port
      * @param targetFPS Target frames per second (default: 10.0)
+     * @param networkClient Optional network client (TCP or UDP). If null, uses TCP.
      */
-    CameraRelayClient(const char* host, uint16_t port, float targetFPS = 10.0);
-    
+    CameraRelayClient(const char* host, uint16_t port, float targetFPS = 10.0,
+                      NetworkClient* networkClient = nullptr);
+
+    /**
+     * Destructor - cleans up network client if owned
+     */
+    ~CameraRelayClient();
+
     /**
      * Initialize camera and client
      * Call this in setup() after WiFi is connected
@@ -131,9 +142,10 @@ private:
     unsigned long _retryDelay;
     unsigned long _sendTimeout;
     bool _debug;
-    
+
     // Connection state
-    WiFiClient _client;
+    NetworkClient* _client;
+    bool _ownsClient;  // True if we created the client and should delete it
     bool _isConnected;
     bool _cameraInitialized;
     unsigned long _lastConnectionAttempt;

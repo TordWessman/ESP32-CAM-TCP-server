@@ -31,9 +31,10 @@
 #elif defined(USE_CLIENT_MODE)
   #include "CameraRelayClient.h"
   #define RELAY_HOST "oland.nejokey.se"  // Change to your relay server IP
-  #define RELAY_PORT 4444
-  #define FPS 10.0
-  CameraRelayClient camera(RELAY_HOST, RELAY_PORT, FPS);
+  #define RELAY_PORT 8081 // UDP
+  //#define RELAY_PORT 4444 // TCP
+  #define FPS 5.0
+CameraRelayClient camera(RELAY_HOST, RELAY_PORT, FPS);
   #define MODE_NAME "Client Mode (Push)"
 #else
 #error "Please define either USE_SERVER_MODE or USE_CLIENT_MODE"

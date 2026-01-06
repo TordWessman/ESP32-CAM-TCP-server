@@ -15,7 +15,7 @@ use std::time::Instant;
 use chrono::Local;
 use clap::Parser;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::{broadcast, watch, RwLock};
 
 const JPEG_START: [u8; 2] = [0xFF, 0xD8];
@@ -23,6 +23,12 @@ const JPEG_END: [u8; 2] = [0xFF, 0xD9];
 const BUFFER_SIZE: usize = 8192;
 const MAX_BUFFER_SIZE: usize = 500_000;
 const BROADCAST_CHANNEL_SIZE: usize = 16;
+
+// UDP fragmentation constants
+const UDP_HEADER_SIZE: usize = 12; // 4 frame_id + 2 frag_idx + 2 total_frags + 4 total_size
+const UDP_MAX_PACKET_SIZE: usize = 1500;
+const UDP_FRAME_TIMEOUT_MS: u64 = 500; // Discard incomplete frames after this
+const UDP_MAX_PENDING_FRAMES: usize = 3; // Max frames being reassembled
 
 #[derive(Parser, Debug)]
 #[command(name = "relay_server_receiver")]
@@ -47,9 +53,13 @@ struct Args {
     #[arg(long, default_value = "0.0.0.0")]
     sender_host: String,
 
-    /// Port for ESP32-CAM to connect to
+    /// Port for ESP32-CAM TCP connections
     #[arg(long, default_value_t = 4444)]
     sender_port: u16,
+
+    /// Port for ESP32-CAM UDP packets (0 to disable)
+    #[arg(long, default_value_t = 8081)]
+    udp_port: u16,
 
     /// Interface to listen for clients
     #[arg(long, default_value = "0.0.0.0")]
@@ -307,6 +317,195 @@ async fn run_sender_server(
     Ok(())
 }
 
+/// Pending frame being reassembled from UDP fragments
+struct PendingFrame {
+    frame_id: u32,
+    total_fragments: u16,
+    total_size: u32,
+    fragments: Vec<Option<Vec<u8>>>,
+    received_count: u16,
+    created_at: Instant,
+}
+
+impl PendingFrame {
+    fn new(frame_id: u32, total_fragments: u16, total_size: u32) -> Self {
+        Self {
+            frame_id,
+            total_fragments,
+            total_size,
+            fragments: vec![None; total_fragments as usize],
+            received_count: 0,
+            created_at: Instant::now(),
+        }
+    }
+
+    fn add_fragment(&mut self, index: u16, data: Vec<u8>) -> bool {
+        if index >= self.total_fragments {
+            return false;
+        }
+        let idx = index as usize;
+        if self.fragments[idx].is_none() {
+            self.fragments[idx] = Some(data);
+            self.received_count += 1;
+        }
+        self.is_complete()
+    }
+
+    fn is_complete(&self) -> bool {
+        self.received_count == self.total_fragments
+    }
+
+    fn is_expired(&self) -> bool {
+        self.created_at.elapsed().as_millis() > UDP_FRAME_TIMEOUT_MS as u128
+    }
+
+    fn assemble(&self) -> Option<Vec<u8>> {
+        if !self.is_complete() {
+            return None;
+        }
+        let mut data = Vec::with_capacity(self.total_size as usize);
+        for frag in &self.fragments {
+            if let Some(f) = frag {
+                data.extend_from_slice(f);
+            } else {
+                return None;
+            }
+        }
+        Some(data)
+    }
+}
+
+/// Handle incoming UDP packets from ESP32-CAM with fragment reassembly
+/// UDP packet format: [frame_id(4)][frag_idx(2)][total_frags(2)][total_size(4)][payload]
+async fn run_udp_receiver(
+    host: String,
+    port: u16,
+    frame_tx: broadcast::Sender<Arc<Vec<u8>>>,
+    latest_frame: Arc<RwLock<Option<Arc<Vec<u8>>>>>,
+    stats: Arc<Stats>,
+    running: Arc<AtomicBool>,
+    mut shutdown_rx: watch::Receiver<bool>,
+) -> std::io::Result<()> {
+    let addr = format!("{}:{}", host, port);
+    let socket = UdpSocket::bind(&addr).await?;
+
+    log_info(&format!("UDP receiver (fragmented) listening on {}", addr));
+
+    let mut buf = vec![0u8; UDP_MAX_PACKET_SIZE];
+    let mut pending_frames: std::collections::HashMap<u32, PendingFrame> = std::collections::HashMap::new();
+    let mut last_completed_frame_id: Option<u32> = None;
+
+    loop {
+        tokio::select! {
+            result = socket.recv_from(&mut buf) => {
+                match result {
+                    Ok((len, _src_addr)) => {
+                        if len < UDP_HEADER_SIZE {
+                            continue;
+                        }
+
+                        // Parse header (big-endian)
+                        let frame_id = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]);
+                        let frag_idx = u16::from_be_bytes([buf[4], buf[5]]);
+                        let total_frags = u16::from_be_bytes([buf[6], buf[7]]);
+                        let total_size = u32::from_be_bytes([buf[8], buf[9], buf[10], buf[11]]);
+
+                        // Skip if this frame is older than the last completed one
+                        if let Some(last_id) = last_completed_frame_id {
+                            if frame_id <= last_id {
+                                continue;
+                            }
+                        }
+
+                        // Extract payload
+                        let payload = buf[UDP_HEADER_SIZE..len].to_vec();
+
+                        // Get or create pending frame
+                        let pending = pending_frames
+                            .entry(frame_id)
+                            .or_insert_with(|| PendingFrame::new(frame_id, total_frags, total_size));
+
+                        // Add fragment
+                        if pending.add_fragment(frag_idx, payload) {
+                            // Frame is complete - assemble and emit
+                            if let Some(frame_data) = pending.assemble() {
+                                let frame_len = frame_data.len();
+
+                                // Validate JPEG
+                                if frame_len >= 2 && frame_data[0..2] == JPEG_START {
+                                    // Update stats
+                                    stats.add_frame(frame_len as u64);
+                                    let fps = stats.fps();
+                                    let total = stats.total_frames.load(Ordering::Relaxed);
+
+                                    log_info(&format!(
+                                        "UDP Frame #{} (id:{}, {} frags): {} bytes ({:.1} KB, {:.2} fps)",
+                                        total, frame_id, total_frags, frame_len,
+                                        frame_len as f64 / 1024.0, fps
+                                    ));
+
+                                    // Wrap in Arc for efficient sharing
+                                    let frame_arc = Arc::new(frame_data);
+
+                                    // Update latest frame
+                                    {
+                                        let mut latest = latest_frame.write().await;
+                                        *latest = Some(Arc::clone(&frame_arc));
+                                    }
+
+                                    // Broadcast to clients
+                                    let _ = frame_tx.send(frame_arc);
+
+                                    last_completed_frame_id = Some(frame_id);
+                                } else {
+                                    log_error(&format!("Reassembled frame {} missing JPEG SOI", frame_id));
+                                }
+                            }
+
+                            // Remove this frame
+                            pending_frames.remove(&frame_id);
+
+                            // Clean up old pending frames
+                            let old_ids: Vec<u32> = pending_frames
+                                .iter()
+                                .filter(|(id, f)| **id < frame_id || f.is_expired())
+                                .map(|(id, _)| *id)
+                                .collect();
+
+                            for id in old_ids {
+                                if let Some(f) = pending_frames.remove(&id) {
+                                    log_info(&format!(
+                                        "Discarding incomplete frame {} ({}/{} fragments)",
+                                        id, f.received_count, f.total_fragments
+                                    ));
+                                }
+                            }
+
+                            // Limit pending frames
+                            while pending_frames.len() > UDP_MAX_PENDING_FRAMES {
+                                if let Some(&oldest_id) = pending_frames.keys().min() {
+                                    pending_frames.remove(&oldest_id);
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        if running.load(Ordering::Relaxed) {
+                            log_error(&format!("UDP receive error: {}", e));
+                        }
+                    }
+                }
+            }
+            _ = shutdown_rx.changed() => {
+                break;
+            }
+        }
+    }
+
+    log_info("UDP receiver stopped");
+    Ok(())
+}
+
 async fn run_client_server(
     host: String,
     port: u16,
@@ -388,7 +587,8 @@ async fn main() -> std::io::Result<()> {
     log_info(&"=".repeat(70));
     log_info("");
     log_info("Configuration:");
-    log_info(&format!("  ESP32-CAM port (receives): {}:{}", args.sender_host, args.sender_port));
+    log_info(&format!("  ESP32-CAM TCP port: {}:{}", args.sender_host, args.sender_port));
+    log_info(&format!("  ESP32-CAM UDP port: {}:{}", args.sender_host, args.udp_port));
     log_info(&format!("  Client port (serves): {}:{}", args.client_host, args.client_port));
     log_info("");
     log_info("How it works:");
@@ -437,10 +637,12 @@ async fn main() -> std::io::Result<()> {
     let stats_sender = Arc::clone(&stats);
     let running_sender = Arc::clone(&running);
     let shutdown_rx_sender = shutdown_rx.clone();
+    let sender_host_tcp = args.sender_host.clone();
+    let sender_port_tcp = args.sender_port;
     let sender_handle = tokio::spawn(async move {
         if let Err(e) = run_sender_server(
-            args.sender_host,
-            args.sender_port,
+            sender_host_tcp,
+            sender_port_tcp,
             frame_tx_sender,
             latest_frame_sender,
             stats_sender,
@@ -451,13 +653,39 @@ async fn main() -> std::io::Result<()> {
         }
     });
 
+    // Start UDP receiver (ESP32-CAM UDP packets)
+    let frame_tx_udp = frame_tx.clone();
+    let latest_frame_udp = Arc::clone(&latest_frame);
+    let stats_udp = Arc::clone(&stats);
+    let running_udp = Arc::clone(&running);
+    let shutdown_rx_udp = shutdown_rx.clone();
+    let udp_port = args.udp_port;
+    let sender_host_udp = args.sender_host.clone();
+    let udp_handle = tokio::spawn(async move {
+        if udp_port > 0 {
+            if let Err(e) = run_udp_receiver(
+                sender_host_udp,
+                udp_port,
+                frame_tx_udp,
+                latest_frame_udp,
+                stats_udp,
+                running_udp,
+                shutdown_rx_udp,
+            ).await {
+                log_error(&format!("UDP receiver error: {}", e));
+            }
+        }
+    });
+
     // Start client server (viewer connections)
     let stats_client = Arc::clone(&stats);
     let running_client = Arc::clone(&running);
+    let client_host = args.client_host.clone();
+    let client_port = args.client_port;
     let client_handle = tokio::spawn(async move {
         if let Err(e) = run_client_server(
-            args.client_host,
-            args.client_port,
+            client_host,
+            client_port,
             frame_tx,
             latest_frame,
             stats_client,
@@ -469,7 +697,7 @@ async fn main() -> std::io::Result<()> {
     });
 
     // Wait for tasks
-    let _ = tokio::join!(sender_handle, client_handle);
+    let _ = tokio::join!(sender_handle, udp_handle, client_handle);
 
     log_info("Server stopped");
     Ok(())

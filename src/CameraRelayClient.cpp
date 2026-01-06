@@ -1,21 +1,27 @@
 /**
  * CameraRelayClient - Implementation
- * 
+ *
  * Complete camera streaming solution with automatic camera initialization,
  * frame capture, and relay server communication.
  */
 
 #include "CameraRelayClient.h"
+#include "TCPNetworkClient.h"
+#include "UDPNetworkClient.h"
+
 #include "camera_pins.h"
 #include <stdarg.h>
 
-CameraRelayClient::CameraRelayClient(const char* host, uint16_t port, float targetFPS)
+CameraRelayClient::CameraRelayClient(const char* host, uint16_t port, float targetFPS,
+                                     NetworkClient* networkClient)
     : _host(host),
       _port(port),
       _targetFPS(targetFPS),
       _retryDelay(5000),
       _sendTimeout(200),
       _debug(false),
+      _client(networkClient),
+      _ownsClient(networkClient == nullptr),
       _isConnected(false),
       _cameraInitialized(false),
       _lastConnectionAttempt(0),
@@ -25,6 +31,11 @@ CameraRelayClient::CameraRelayClient(const char* host, uint16_t port, float targ
       _bytesSent(0),
       _fpsIndex(0)
 {
+    // Create default TCP client if none provided
+    if (_client == nullptr) {
+        _client = new UDPNetworkClient();
+    }
+
     // Initialize FPS timestamp array
     for (int i = 0; i < 10; i++) {
         _fpsTimestamps[i] = 0;
@@ -149,7 +160,7 @@ CameraRelayClient::Status CameraRelayClient::run() {
     }
     
     // Check if client is still connected
-    if (_isConnected && !_client.connected()) {
+    if (_isConnected && !_client->connected()) {
         debugPrint("[CameraRelayClient] Connection lost");
         _isConnected = false;
         return NOT_CONNECTED;
@@ -185,7 +196,7 @@ CameraRelayClient::Status CameraRelayClient::run() {
 
         // Try to write remaining data
         size_t toWrite = frameLen - written;
-        size_t sent = _client.write(fb->buf + written, toWrite);
+        size_t sent = _client->send(fb->buf + written, toWrite);
 
         if (sent == 0) {
             // Connection error
@@ -205,7 +216,7 @@ CameraRelayClient::Status CameraRelayClient::run() {
     if (timedOut) {
         debugPrintf("[CameraRelayClient] ✗ Send timeout after %lu ms, discarding frame", sendTime);
         esp_camera_fb_return(fb);
-        _client.stop();
+        _client->stop();
         _isConnected = false;
         return SEND_TIMEOUT;
     }
@@ -214,7 +225,7 @@ CameraRelayClient::Status CameraRelayClient::run() {
         debugPrintf("[CameraRelayClient] ✗ Send failed: %u/%u bytes", written, frameLen);
         esp_camera_fb_return(fb);
         _isConnected = false;
-        _client.stop();
+        _client->stop();
         return SEND_FAILED;
     }
     
@@ -248,10 +259,10 @@ void CameraRelayClient::attemptConnection() {
     
     debugPrintf("[CameraRelayClient] Connecting to %s:%d...", _host, _port);
     
-    if (_client.connect(_host, _port)) {
+    if (_client->connect(_host, _port)) {
         _isConnected = true;
-        _client.setNoDelay(true);  // Disable Nagle's algorithm for lower latency
-        _client.setTimeout(150);   // 150ms socket timeout
+        _client->setNoDelay(true);  // Disable Nagle's algorithm for lower latency
+        _client->setTimeout(150);   // 150ms socket timeout
         debugPrint("[CameraRelayClient] ✓ Connected!");
     } else {
         debugPrint("[CameraRelayClient] ✗ Connection failed");
@@ -295,9 +306,17 @@ void CameraRelayClient::updateFPS() {
 
 void CameraRelayClient::disconnect() {
     if (_isConnected) {
-        _client.stop();
+        _client->stop();
         _isConnected = false;
         debugPrint("[CameraRelayClient] Disconnected");
+    }
+}
+
+CameraRelayClient::~CameraRelayClient() {
+    disconnect();
+    if (_ownsClient && _client) {
+        delete _client;
+        _client = nullptr;
     }
 }
 
