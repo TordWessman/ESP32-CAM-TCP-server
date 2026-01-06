@@ -30,6 +30,11 @@ const UDP_MAX_PACKET_SIZE: usize = 1500;
 const UDP_FRAME_TIMEOUT_MS: u64 = 500; // Discard incomplete frames after this
 const UDP_MAX_PENDING_FRAMES: usize = 3; // Max frames being reassembled
 
+// Handshake constants
+const HANDSHAKE_MAGIC: [u8; 2] = [b'H', b'S'];
+const HANDSHAKE_SIZE: usize = 10; // 2 magic + 8 password
+const HANDSHAKE_PASSWORD: &[u8; 8] = b"ESP32CAM"; // Must match ESP32
+
 #[derive(Parser, Debug)]
 #[command(name = "relay_server_receiver")]
 #[command(about = "ESP32-CAM Receiver Relay Server (Push Mode)")]
@@ -247,12 +252,18 @@ async fn handle_client_connection(
     }
 
     // Receive and forward frames
+    let mut frames_sent = 0u64;
     while running.load(Ordering::Relaxed) {
         match frame_rx.recv().await {
             Ok(frame) => {
+                let frame_len = frame.len();
                 if let Err(e) = socket.write_all(&frame).await {
                     log_info(&format!("Client {} write error: {}", addr, e));
                     break;
+                }
+                frames_sent += 1;
+                if frames_sent <= 3 || frames_sent % 100 == 0 {
+                    log_info(&format!("Sent frame #{} ({} bytes) to {}", frames_sent, frame_len, addr));
                 }
             }
             Err(broadcast::error::RecvError::Lagged(n)) => {
@@ -319,7 +330,6 @@ async fn run_sender_server(
 
 /// Pending frame being reassembled from UDP fragments
 struct PendingFrame {
-    frame_id: u32,
     total_fragments: u16,
     total_size: u32,
     fragments: Vec<Option<Vec<u8>>>,
@@ -328,9 +338,8 @@ struct PendingFrame {
 }
 
 impl PendingFrame {
-    fn new(frame_id: u32, total_fragments: u16, total_size: u32) -> Self {
+    fn new(total_fragments: u16, total_size: u32) -> Self {
         Self {
-            frame_id,
             total_fragments,
             total_size,
             fragments: vec![None; total_fragments as usize],
@@ -399,7 +408,20 @@ async fn run_udp_receiver(
         tokio::select! {
             result = socket.recv_from(&mut buf) => {
                 match result {
-                    Ok((len, _src_addr)) => {
+                    Ok((len, src_addr)) => {
+                        // Check for handshake packet
+                        if len == HANDSHAKE_SIZE && buf[0..2] == HANDSHAKE_MAGIC {
+                            let password = &buf[2..10];
+                            if password == HANDSHAKE_PASSWORD {
+                                log_info(&format!("Handshake received from {} - resetting state", src_addr));
+                                pending_frames.clear();
+                                last_completed_frame_id = None;
+                            } else {
+                                log_error(&format!("Invalid handshake password from {}", src_addr));
+                            }
+                            continue;
+                        }
+
                         if len < UDP_HEADER_SIZE {
                             continue;
                         }
@@ -423,7 +445,7 @@ async fn run_udp_receiver(
                         // Get or create pending frame
                         let pending = pending_frames
                             .entry(frame_id)
-                            .or_insert_with(|| PendingFrame::new(frame_id, total_frags, total_size));
+                            .or_insert_with(|| PendingFrame::new(total_frags, total_size));
 
                         // Add fragment
                         if pending.add_fragment(frag_idx, payload) {
