@@ -14,6 +14,7 @@ CameraRelayClient::CameraRelayClient(const char* host, uint16_t port, float targ
       _port(port),
       _targetFPS(targetFPS),
       _retryDelay(5000),
+      _sendTimeout(200),
       _debug(false),
       _isConnected(false),
       _cameraInitialized(false),
@@ -159,29 +160,63 @@ CameraRelayClient::Status CameraRelayClient::run() {
         return IDLE;
     }
     
-    // Capture frame
+    // Capture frame with timing
+    unsigned long captureStart = millis();
     camera_fb_t *fb = esp_camera_fb_get();
+    unsigned long captureTime = millis() - captureStart;
+
     if (!fb) {
         debugPrint("[CameraRelayClient] ✗ Frame capture failed");
         return CAMERA_CAPTURE_FAILED;
     }
-    
-    // Print frame size
-    debugPrintf("[CameraRelayClient] Frame #%u: %u bytes (%.1f KB)", 
-                _frameCount + 1, fb->len, fb->len / 1024.0);
-    
-    // Send frame
-    size_t written = _client.write(fb->buf, fb->len);
-    
-    if (written != fb->len) {
-        debugPrintf("[CameraRelayClient] ✗ Send failed: %u/%u bytes", written, fb->len);
+
+    // Send frame with timeout
+    unsigned long sendStart = millis();
+    size_t written = 0;
+    size_t frameLen = fb->len;
+    bool timedOut = false;
+
+    while (written < frameLen) {
+        // Check timeout
+        if (millis() - sendStart > _sendTimeout) {
+            timedOut = true;
+            break;
+        }
+
+        // Try to write remaining data
+        size_t toWrite = frameLen - written;
+        size_t sent = _client.write(fb->buf + written, toWrite);
+
+        if (sent == 0) {
+            // Connection error
+            break;
+        }
+        written += sent;
+    }
+
+    unsigned long sendTime = millis() - sendStart;
+
+    // Print timing info
+    debugPrintf("[CameraRelayClient] Frame #%u: %u bytes | capture: %lu ms | send: %lu ms%s",
+                _frameCount + 1, frameLen, captureTime, sendTime,
+                timedOut ? " [TIMEOUT]" : "");
+
+    // Handle timeout - discard frame and reconnect to resync stream
+    if (timedOut) {
+        debugPrintf("[CameraRelayClient] ✗ Send timeout after %lu ms, discarding frame", sendTime);
+        esp_camera_fb_return(fb);
+        _client.stop();
+        _isConnected = false;
+        return SEND_TIMEOUT;
+    }
+
+    if (written != frameLen) {
+        debugPrintf("[CameraRelayClient] ✗ Send failed: %u/%u bytes", written, frameLen);
         esp_camera_fb_return(fb);
         _isConnected = false;
         _client.stop();
         return SEND_FAILED;
     }
-    
-    debugPrintf("[CameraRelayClient] ✓ Sent %u bytes successfully", written);
     
     // Update statistics
     _bytesSent += written;
@@ -215,6 +250,7 @@ void CameraRelayClient::attemptConnection() {
     
     if (_client.connect(_host, _port)) {
         _isConnected = true;
+        _client.setNoDelay(true);  // Disable Nagle's algorithm for lower latency
         debugPrint("[CameraRelayClient] ✓ Connected!");
     } else {
         debugPrint("[CameraRelayClient] ✗ Connection failed");
@@ -273,6 +309,7 @@ const char* CameraRelayClient::getStatusString(Status status) {
         case SEND_FAILED: return "SEND_FAILED";
         case RECONNECTING: return "RECONNECTING";
         case IDLE: return "IDLE";
+        case SEND_TIMEOUT: return "SEND_TIMEOUT";
         default: return "UNKNOWN";
     }
 }

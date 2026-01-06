@@ -42,7 +42,8 @@ public:
         NOT_CONNECTED = 3,         // Not connected to relay server
         SEND_FAILED = 4,           // Failed to send frame
         RECONNECTING = 5,          // Currently attempting to reconnect
-        IDLE = 6                   // Waiting for next frame time (FPS throttling)
+        IDLE = 6,                  // Waiting for next frame time (FPS throttling)
+        SEND_TIMEOUT = 7           // Frame discarded due to send timeout
     };
 
     /**
@@ -98,6 +99,12 @@ public:
      * Set retry delay in milliseconds (default: 5000)
      */
     void setRetryDelay(unsigned long delayMs) { _retryDelay = delayMs; }
+
+    /**
+     * Set send timeout in milliseconds (default: 200)
+     * Frames taking longer than this to send will be discarded
+     */
+    void setSendTimeout(unsigned long timeoutMs) { _sendTimeout = timeoutMs; }
     
     /**
      * Enable/disable debug output
@@ -122,6 +129,7 @@ private:
     uint16_t _port;
     float _targetFPS;
     unsigned long _retryDelay;
+    unsigned long _sendTimeout;
     bool _debug;
     
     // Connection state
