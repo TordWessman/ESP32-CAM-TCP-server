@@ -60,7 +60,7 @@ In another PlatformIO project's `platformio.ini`:
 
 ```ini
 lib_deps =
-    https://github.com/user/camera.tcp.git
+    https://github.com/user/r2cam.git
 build_flags =
     -DCAMERA_MODEL_AI_THINKER
 ```

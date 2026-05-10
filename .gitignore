@@ -31,3 +31,6 @@ target
 
 #swift sdk
 swift.sdk
+
+#claude
+.claude

@@ -1,11 +1,11 @@
 {
-  "name": "ESP32-CAM-TCP",
+  "name": "r2cam",
   "version": "1.0.0",
   "description": "ESP32-CAM camera configuration and TCP streaming utilities for OV2640",
   "keywords": ["esp32", "esp32-cam", "camera", "ov2640", "tcp", "streaming"],
   "repository": {
     "type": "git",
-    "url": "https://github.com/user/camera.tcp"
+    "url": "https://github.com/user/r2cam"
   },
   "authors": [
     {
