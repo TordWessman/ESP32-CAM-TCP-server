@@ -2,7 +2,7 @@
   "name": "r2cam",
   "version": "1.0.0",
   "description": "ESP32-CAM camera configuration and TCP streaming utilities for OV2640",
-  "keywords": ["esp32", "esp32-cam", "camera", "ov2640", "tcp", "streaming"],
+  "keywords": ["esp32", "esp32-cam", "camera", "ov2640", "tcp", "streaming", "relay"],
   "repository": {
     "type": "git",
     "url": "https://github.com/user/r2cam"
@@ -15,9 +15,14 @@
   "license": "MIT",
   "frameworks": "arduino",
   "platforms": "espressif32",
-  "headers": ["camera_config.h", "camera_pins.h"],
+  "headers": "camera_config.h",
   "build": {
-    "flags": "-I include",
-    "srcFilter": "-<*>"
+    "srcFilter": ["+<*>", "-<main.cpp>"]
+  },
+  "export": {
+    "include": [
+      "include",
+      "src"
+    ]
   }
 }
