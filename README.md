@@ -18,40 +18,64 @@ ESP32-CAM JPEG video streaming with two operating modes. In **pull mode**, the E
 
 Switch modes by changing one `#define` in `src/main.cpp`.
 
-## Relay Servers
+## Relay Server
 
-Pull mode (relay connects to ESP32):
-```bash
-python3 relay_server.py --esp32-host 192.168.1.100 --esp32-port 1234 --client-port 8080
+The relay server is written in Rust and located in `relay_server/`. It receives frames pushed by the ESP32-CAM (via TCP or UDP) and broadcasts them to connected clients.
+
+```
+ESP32-CAM -> [TCP :4444 / UDP :8081] -> Relay Server -> [TCP :8080] -> Clients
 ```
 
-Push mode (ESP32 connects to relay):
+### Building
+
 ```bash
-python3 relay_server_receiver.py --sender-port 4444 --client-port 8080
+cd relay_server
+cargo build --release
 ```
 
-Test client (capture frames from ESP32 or relay):
+### Running
+
 ```bash
-python3 test_client.py --host 192.168.1.100 --port 1234
-python3 test_client.py --host relay.example.com --port 8080 --continuous --fps 5
+# Default ports (TCP 4444, UDP 8081, clients 8080)
+./target/release/relay_server_receiver
+
+# Custom ports
+./target/release/relay_server_receiver --sender-port 4444 --udp-port 8081 --client-port 8080
+
+# With debug logging
+./target/release/relay_server_receiver --debug
 ```
+
+### Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--sender-host` | `0.0.0.0` | Interface to listen for ESP32-CAM TCP |
+| `--sender-port` | `4444` | Port for ESP32-CAM TCP connections |
+| `--udp-port` | `8081` | Port for ESP32-CAM UDP packets (0 to disable) |
+| `--client-host` | `0.0.0.0` | Interface to listen for viewer clients |
+| `--client-port` | `8080` | Port for clients to connect to |
+| `--debug` | off | Enable debug logging |
 
 ## Project Structure
 
 ```
 src/main.cpp                  Entry point with mode selection
-include/CameraTcpServer.h     Camera + TCP server (pull mode)
-include/CameraRelayClient.h   Camera + relay client (push mode)
-include/TcpServer.h           Generic TCP server (no camera)
-include/RelayClient.h         Generic TCP relay client (no camera)
+src/CameraRelayClient.cpp     Camera + relay client (push mode)
+src/CameraTcpServer.cpp       Camera + TCP server (pull mode)
+src/RelayClient.cpp           Generic TCP relay client (no camera)
+src/TcpServer.cpp             Generic TCP server (no camera)
+include/CameraRelayClient.h   Camera + relay client header
+include/CameraTcpServer.h     Camera + TCP server header
+include/RelayClient.h         Generic relay client header
+include/TcpServer.h           Generic TCP server header
 include/NetworkClient.h       Abstract network interface
 include/UDPNetworkClient.h    UDP with fragmentation
 include/TCPNetworkClient.h    TCP wrapper
 include/camera_config.h       OV2640 camera initialization
 include/camera_pins.h         GPIO maps for 12+ board variants
-relay_server.py               Pull-mode relay
-relay_server_receiver.py      Push-mode relay
-test_client.py                Frame capture test client
+relay_server/                 Rust relay server (push mode)
+examples/tcp_server/          Example TCP server usage
 ```
 
 ## Using as a Library
