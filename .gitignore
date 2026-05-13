@@ -2,9 +2,11 @@ configuration.h
 notes.txt
 CLAUDE.md
 
-# WiFi Credentials - DO NOT COMMIT
+# Secrets - DO NOT COMMIT
 secrets.h
+Secrets.h
 include/secrets.h
+include/Secrets.h
 
 # PlatformIO
 .pio
