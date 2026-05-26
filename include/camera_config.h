@@ -4,6 +4,22 @@
 #include "esp_camera.h"
 #include "camera_pins.h"
 
+/// @port gpio:Y2_GPIO_NUM input
+/// @port gpio:Y3_GPIO_NUM input
+/// @port gpio:Y4_GPIO_NUM input
+/// @port gpio:Y5_GPIO_NUM input
+/// @port gpio:Y6_GPIO_NUM input
+/// @port gpio:Y7_GPIO_NUM input
+/// @port gpio:Y8_GPIO_NUM input
+/// @port gpio:Y9_GPIO_NUM input
+/// @port gpio:XCLK_GPIO_NUM output
+/// @port gpio:PCLK_GPIO_NUM input
+/// @port gpio:VSYNC_GPIO_NUM input
+/// @port gpio:HREF_GPIO_NUM input
+/// @port i2c:SIOD_GPIO_NUM bidir
+/// @port i2c:SIOC_GPIO_NUM bidir
+/// @port gpio:PWDN_GPIO_NUM output
+/// @port gpio:RESET_GPIO_NUM output
 bool createCameraConfiguration() {
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;

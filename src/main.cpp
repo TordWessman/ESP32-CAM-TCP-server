@@ -42,6 +42,7 @@ CameraRelayClient camera(RELAY_HOST, RELAY_PORT, FPS);
 
   void setup()
   {
+    /// @port serial:115200 bus
     Serial.begin(115200);
     delay(1000); // Give serial monitor time to connect
     
